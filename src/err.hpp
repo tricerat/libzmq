@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2007-2015 Contributors as noted in the AUTHORS file
+    Copyright (c) 2007-2016 Contributors as noted in the AUTHORS file
 
     This file is part of libzmq, the ZeroMQ core engine in C++.
 
@@ -40,17 +40,13 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-#include "platform.hpp"
+#ifndef ZMQ_HAVE_WINDOWS
+#include <netdb.h>
+#endif
+
 #include "likely.hpp"
 
 //  0MQ-specific error codes are defined in zmq.h
-#include "../include/zmq.h"
-
-#ifdef ZMQ_HAVE_WINDOWS
-#include "windows.hpp"
-#else
-#include <netdb.h>
-#endif
 
 // EPROTO is not used by OpenBSD and maybe other platforms.
 #ifndef EPROTO
@@ -61,6 +57,7 @@ namespace zmq
 {
     const char *errno_to_string (int errno_);
     void zmq_abort (const char *errmsg_);
+    void print_backtrace (void);
 }
 
 #ifdef ZMQ_HAVE_WINDOWS
@@ -121,7 +118,7 @@ namespace zmq
                 __FILE__, __LINE__);\
             zmq::zmq_abort (#x);\
         }\
-    } while (false) 
+    } while (false)
 
 //  Provides convenient way to check for errno-style errors.
 #define errno_assert(x) \

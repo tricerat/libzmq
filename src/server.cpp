@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2007-2015 Contributors as noted in the AUTHORS file
+    Copyright (c) 2007-2016 Contributors as noted in the AUTHORS file
 
     This file is part of libzmq, the ZeroMQ core engine in C++.
 
@@ -27,6 +27,7 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+#include "precompiled.hpp"
 #include "macros.hpp"
 #include "server.hpp"
 #include "pipe.hpp"
@@ -121,7 +122,7 @@ int zmq::server_t::xsend (msg_t *msg_)
     bool ok = it->second.pipe->write (msg_);
     if (unlikely (!ok)) {
         // Message failed to send - we must close it ourselves.
-        int rc = msg_->close ();
+        rc = msg_->close ();
         errno_assert (rc == 0);
     }
     else

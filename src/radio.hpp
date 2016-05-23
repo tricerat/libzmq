@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2007-2015 Contributors as noted in the AUTHORS file
+    Copyright (c) 2007-2016 Contributors as noted in the AUTHORS file
 
     This file is part of libzmq, the ZeroMQ core engine in C++.
 
@@ -32,6 +32,7 @@
 
 #include <map>
 #include <string>
+#include <vector>
 
 #include "socket_base.hpp"
 #include "session_base.hpp"
@@ -70,6 +71,10 @@ namespace zmq
         typedef std::multimap<std::string, pipe_t*> subscriptions_t;
         subscriptions_t subscriptions;
 
+        //  List of udp pipes
+        typedef std::vector<pipe_t*> udp_pipes_t;
+        udp_pipes_t udp_pipes;
+
         //  Distributor of messages holding the list of outbound pipes.
         dist_t dist;
 
@@ -77,6 +82,31 @@ namespace zmq
         const radio_t &operator = (const radio_t&);
     };
 
+    class radio_session_t : public session_base_t
+    {
+    public:
+
+        radio_session_t (zmq::io_thread_t *io_thread_, bool connect_,
+            zmq::socket_base_t *socket_, const options_t &options_,
+            address_t *addr_);
+        ~radio_session_t ();
+
+        //  Overrides of the functions from session_base_t.
+        int push_msg (msg_t *msg_);
+        int pull_msg (msg_t *msg_);
+        void reset ();
+    private:
+
+        enum {
+            group,
+            body
+        } state;
+
+        msg_t pending_msg;
+
+        radio_session_t (const radio_session_t&);
+        const radio_session_t &operator = (const radio_session_t&);
+    };
 }
 
 #endif

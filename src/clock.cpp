@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2007-2015 Contributors as noted in the AUTHORS file
+    Copyright (c) 2007-2016 Contributors as noted in the AUTHORS file
 
     This file is part of libzmq, the ZeroMQ core engine in C++.
 
@@ -27,8 +27,8 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+#include "precompiled.hpp"
 #include "clock.hpp"
-#include "platform.hpp"
 #include "likely.hpp"
 #include "config.hpp"
 #include "err.hpp"
@@ -106,6 +106,8 @@ f_compatible_get_tick_count64 init_compatible_get_tick_count64()
 
   if (func == NULL)
     func = compatible_get_tick_count64;
+
+  ::FreeLibrary(module);
 
   return func;
 }

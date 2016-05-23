@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2007-2015 Contributors as noted in the AUTHORS file
+    Copyright (c) 2007-2016 Contributors as noted in the AUTHORS file
 
     This file is part of libzmq, the ZeroMQ core engine in C++.
 
@@ -27,6 +27,7 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+#include "precompiled.hpp"
 #include <string.h>
 
 #include "radio.hpp"
@@ -57,23 +58,24 @@ void zmq::radio_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_)
 
     dist.attach (pipe_);
 
+    if (subscribe_to_all_)
+        udp_pipes.push_back (pipe_);
     //  The pipe is active when attached. Let's read the subscriptions from
     //  it, if any.
-    xread_activated (pipe_);
+    else
+        xread_activated (pipe_);
 }
 
 void zmq::radio_t::xread_activated (pipe_t *pipe_)
 {
     //  There are some subscriptions waiting. Let's process them.
-    msg_t sub;
-    while (pipe_->read (&sub)) {
+    msg_t msg;
+    while (pipe_->read (&msg)) {
         //  Apply the subscription to the trie
-        const char * data = (char *) sub.data ();
-        const size_t size = sub.size ();
-        if (size > 0 && (*data == 'J' || *data == 'L')) {
-            std::string group = std::string (data + 1, sub. size() - 1);
+        if (msg.is_join () || msg.is_leave ()) {
+            std::string group = std::string (msg.group ());
 
-            if (*data == 'J')
+            if (msg.is_join ())
                 subscriptions.insert (subscriptions_t::value_type (group, pipe_));
             else {
                 std::pair<subscriptions_t::iterator, subscriptions_t::iterator> range =
@@ -87,7 +89,7 @@ void zmq::radio_t::xread_activated (pipe_t *pipe_)
                 }
             }
         }
-        sub.close ();
+        msg.close ();
     }
 }
 
@@ -98,11 +100,18 @@ void zmq::radio_t::xwrite_activated (pipe_t *pipe_)
 
 void zmq::radio_t::xpipe_terminated (pipe_t *pipe_)
 {
-    for (subscriptions_t::iterator it = subscriptions.begin (); it != subscriptions.end (); ++it) {
+    for (subscriptions_t::iterator it = subscriptions.begin (); it != subscriptions.end (); ) {
         if (it->second == pipe_) {
-            subscriptions.erase (it);
+            subscriptions.erase (it++);
+        } else {
+            ++it;
         }
     }
+
+    udp_pipes_t::iterator it = std::find(udp_pipes.begin(),
+        udp_pipes.end (), pipe_);
+    if (it != udp_pipes.end ())
+        udp_pipes.erase (it);
 
     dist.pipe_terminated (pipe_);
 }
@@ -115,37 +124,16 @@ int zmq::radio_t::xsend (msg_t *msg_)
         return -1;
     }
 
-    size_t size = msg_->size ();
-    char *group = (char*) msg_->data();
-
-    //  Maximum allowed group length is 255
-    if (size > ZMQ_GROUP_MAX_LENGTH)
-        size = ZMQ_GROUP_MAX_LENGTH;
-
-    //  Check if NULL terminated
-    bool terminated = false;
-
-    for (size_t index = 0; index < size; index++) {
-        if (group[index] == '\0') {
-            terminated = true;
-            break;
-        }
-    }
-
-    if (!terminated) {
-        //  User didn't include a group in the message
-        errno = EINVAL;
-        return -1;
-    }
-
     dist.unmatch ();
 
     std::pair<subscriptions_t::iterator, subscriptions_t::iterator> range =
-        subscriptions.equal_range (std::string(group));
+        subscriptions.equal_range (std::string(msg_->group ()));
 
-    for (subscriptions_t::iterator it = range.first; it != range.second; ++it) {
+    for (subscriptions_t::iterator it = range.first; it != range.second; ++it)
         dist.match (it-> second);
-    }
+
+    for (udp_pipes_t::iterator it = udp_pipes.begin (); it != udp_pipes.end (); ++it)
+        dist.match (*it);
 
     int rc = dist.send_to_matching (msg_);
 
@@ -160,6 +148,7 @@ bool zmq::radio_t::xhas_out ()
 int zmq::radio_t::xrecv (msg_t *msg_)
 {
     //  Messages cannot be received from PUB socket.
+    LIBZMQ_UNUSED (msg_);
     errno = ENOTSUP;
     return -1;
 }
@@ -167,4 +156,95 @@ int zmq::radio_t::xrecv (msg_t *msg_)
 bool zmq::radio_t::xhas_in ()
 {
     return false;
+}
+
+zmq::radio_session_t::radio_session_t (io_thread_t *io_thread_, bool connect_,
+      socket_base_t *socket_, const options_t &options_,
+      address_t *addr_) :
+    session_base_t (io_thread_, connect_, socket_, options_, addr_),
+    state (group)
+{
+}
+
+zmq::radio_session_t::~radio_session_t ()
+{
+}
+
+int zmq::radio_session_t::push_msg (msg_t *msg_)
+{
+    if (msg_->flags() & msg_t::command) {
+        char *command_data =
+            static_cast <char *> (msg_->data ());
+        const size_t data_size = msg_->size ();
+
+        int group_length;
+        char * group;
+
+        msg_t join_leave_msg;
+        int rc;
+
+        //  Set the msg type to either JOIN or LEAVE
+        if (data_size >= 5 && memcmp (command_data, "\4JOIN", 5) == 0) {
+            group_length = (int) data_size - 5;
+            group = command_data + 5;
+            rc = join_leave_msg.init_join ();
+        }
+        else if (data_size >= 6 && memcmp (command_data, "\5LEAVE", 6) == 0) {
+            group_length = (int) data_size - 6;
+            group = command_data + 6;
+            rc = join_leave_msg.init_leave ();
+        }
+        //  If it is not a JOIN or LEAVE just push the message
+        else
+            return session_base_t::push_msg (msg_);
+
+        errno_assert (rc == 0);
+
+        //  Set the group
+        rc = join_leave_msg.set_group (group, group_length);
+        errno_assert (rc == 0);
+
+        //  Close the current command
+        rc = msg_->close ();
+        errno_assert (rc == 0);
+
+        //  Push the join or leave command
+        *msg_ = join_leave_msg;
+        return session_base_t::push_msg (msg_);
+    }
+    else
+        return session_base_t::push_msg (msg_);
+}
+
+int zmq::radio_session_t::pull_msg (msg_t *msg_)
+{
+    if (state == group) {
+        int rc = session_base_t::pull_msg (&pending_msg);
+        if (rc != 0)
+            return rc;
+
+        const char *group = pending_msg.group ();
+        int length = (int) strlen (group);
+
+        //  First frame is the group
+        rc = msg_->init_size (length);
+        errno_assert(rc == 0);
+        msg_->set_flags(msg_t::more);
+        memcpy (msg_->data (), group, length);
+
+        //  Next status is the body
+        state = body;
+        return 0;
+    }
+    else {
+        *msg_ = pending_msg;
+        state = group;
+        return 0;
+    }
+}
+
+void zmq::radio_session_t::reset ()
+{
+    session_base_t::reset ();
+    state = group;
 }

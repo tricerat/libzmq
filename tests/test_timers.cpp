@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2007-2015 Contributors as noted in the AUTHORS file
+    Copyright (c) 2007-2016 Contributors as noted in the AUTHORS file
 
     This file is part of libzmq, the ZeroMQ core engine in C++.
 
@@ -28,13 +28,6 @@
 */
 
 #include "testutil.hpp"
-#include "../include/zmq_utils.h"
-
-#if defined ZMQ_HAVE_WINDOWS
-#include "windows.hpp"
-#else
-#include <unistd.h>
-#endif
 
 void sleep_ (long timeout_)
 {
@@ -49,7 +42,21 @@ void sleep_ (long timeout_)
 
 void handler (int timer_id, void* arg)
 {
+    (void) timer_id;               //  Stop 'unused' compiler warnings
     *((bool *)arg) = true;
+}
+
+int sleep_and_execute(void *timers_) 
+{
+    int timeout = zmq_timers_timeout (timers_);
+
+    //  Sleep methods are inaccurate, so we sleep in a loop until time arrived
+    while (timeout > 0) {
+        sleep_ (timeout);
+        timeout = zmq_timers_timeout(timers_);
+    }
+
+    return zmq_timers_execute(timers_);
 }
 
 int main (void)
@@ -75,9 +82,8 @@ int main (void)
     assert (rc == 0);
     assert (!timer_invoked);
 
-    // Wait until the end
-    sleep_ (zmq_timers_timeout (timers));
-    rc = zmq_timers_execute (timers);
+    // Wait until the end    
+    rc = sleep_and_execute (timers);
     assert (rc == 0);
     assert (timer_invoked);
     timer_invoked = false;
@@ -97,16 +103,14 @@ int main (void)
     assert (!timer_invoked);
 
     // Wait until the end
-    sleep_ (zmq_timers_timeout (timers));
-    rc = zmq_timers_execute (timers);
+    rc = sleep_and_execute(timers);
     assert (rc == 0);
     assert (timer_invoked);
     timer_invoked = false;
 
     // reschedule
     zmq_timers_set_interval (timers, timer_id, 50);
-    sleep_ (51);
-    rc = zmq_timers_execute (timers);
+    rc = sleep_and_execute(timers);
     assert (rc == 0);
     assert (timer_invoked);
     timer_invoked = false;
